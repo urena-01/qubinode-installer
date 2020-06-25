@@ -11,6 +11,7 @@ suffix=$(awk -F '-' '/idm_hostname:/ {print $2;exit}' "${idm_vars_file}" |tr -d 
 idm_srv_hostname="$prefix-$suffix"
 idm_srv_fqdn="$prefix-$suffix.$domain"
 idm_server_ip=$(awk '/idm_server_ip:/ {print $2;exit}' "${idm_vars_file}" |tr -d '"')
+idm_admin_user=$(awk '/idm_admin_user:/ {print $2;exit}' "${idm_vars_file}" |tr -d '"')
 
 function display_idmsrv_unavailable () {
     printf "%s\n" "${yel}Either the IdM server variable idm_public_ip is not set.${end}"
@@ -130,9 +131,13 @@ function ask_user_for_custom_idm_server () {
                 sed -i "s/idm_admin_user:.*/idm_admin_user: "$idm_admin_user"/g" "${idm_vars_file}"
                 printf "%s\n" ""
             fi
+            sed -i "s/ask_use_existing_idm:.*/ask_use_existing_idm: skip/g" "${idm_vars_file}"
         else
             # Ask user for password for IdM
             ask_user_for_idm_password
+
+            # ensure user isn't prompted for existing IdM
+            sed -i "s/ask_use_existing_idm:.*/ask_use_existing_idm: skip/g" "${idm_vars_file}"
 
             # Ask user if they want to give the IdM server a static IP
             if grep '""' "${idm_vars_file}"|grep -q "idm_check_static_ip:"
@@ -203,12 +208,12 @@ function ask_user_for_custom_idm_server () {
             idm_dm_pwd=$(awk '/idm_dm_pwd:/ {print $2;exit}' ${vaultfile})
             idm_admin_pwd=$(awk '/idm_admin_pwd:/ {print $2;exit}' ${vaultfile})
         fi
-    
-        if [[ "A${idm_ssh_user}" != 'A""' ]] && [[ "A${idm_dm_pwd}" != 'A""' ]] && [[ "A${idm_admin_pwd}" != 'A""' ]] 
+
+        if [[ "A${idm_ssh_user}" != 'A""' ]] && [[ "A${idm_dm_pwd}" != 'A""' ]] && [[ "A${idm_admin_pwd}" != 'A""' ]]
         then
             # Tell installer not to deploy IdM server
             sed -i "s/ask_use_existing_idm:.*/ask_use_existing_idm: skip/g" "${idm_vars_file}"
-        fi    
+        fi
     fi
 }
 
@@ -276,6 +281,7 @@ function qubinode_idm_ask_ip_address () {
 
 
 function isIdMrunning () {
+    idm_server_ip=$(awk '/idm_server_ip:/ {print $2;exit}' "${idm_vars_file}" |tr -d '"')
     if ! curl -k -s "https://${idm_srv_fqdn}/ipa/config/ca.crt" > /dev/null
     then
         idm_running=false
@@ -289,6 +295,8 @@ function isIdMrunning () {
 
 function qubinode_teardown_idm () {
      IDM_PLAY_CLEANUP="${project_dir}/playbooks/idm_server_cleanup.yml"
+     libvirt_dir=$(awk '/^kvm_host_libvirt_dir/ {print $2}' "${project_dir}/playbooks/vars/kvm_host.yml")
+     local vmdisk="${libvirt_dir}/${idm_srv_hostname}_vda.qcow2"
      if sudo virsh list --all |grep -q "${idm_srv_hostname}"
      then
          echo "Remove IdM VM"
@@ -296,6 +304,7 @@ function qubinode_teardown_idm () {
      fi
      echo "Ensure IdM server deployment is cleaned up"
      ansible-playbook "${IDM_PLAY_CLEANUP}" || exit $?
+     sudo test -f "${vmdisk}" && sudo rm -f "${vmdisk}"
 
      printf "\n\n*************************\n"
      printf "* IdM server VM deleted *\n"
@@ -327,32 +336,71 @@ function qubinode_deploy_idm_vm () {
      fi
 }
 
-function qubinode_install_idm () {
-    qubinode_vm_deployment_precheck
-    ask_user_input
-    IDM_INSTALL_PLAY="${project_dir}/playbooks/idm_server.yml"
-
-    echo "Install and configure the IdM server"
-    idm_server_ip=$(awk '/idm_server_ip:/ {print $2}' "${idm_vars_file}")
-    echo "Current IP of IDM Server ${idm_server_ip}" || exit $?
-    ansible-playbook "${IDM_INSTALL_PLAY}" --extra-vars "vm_ipaddress=${idm_server_ip}" || exit $?
+function qubinode_idm_status () {
     isIdMrunning
     if [ "A${idm_running}" == "Atrue" ]
     then
-        printf "\n\n ${yel}*********************************************************************************${end}\n"
-        printf " ${yel}**${end}   IdM server is installed                                                   ${yel}**${end}\n"
-        printf "         Url: https://${idm_srv_fqdn}/ipa \n"
-        printf "         Username: $(whoami) \n"
-        printf "         Password: the vault variable *admin_user_password* \n\n"
-        printf "     Run: ansible-vault edit ${vaultfile}} \n"
-        printf " ${yel}*******************************************************************************${end}\n\n"
+        printf "\n\n\n"
+        printf "     ${blu}IdM server is installed${end}\n"
+        printf "   ${yel}****************************************************${end}\n"
+        printf "    Webconsole: ${cyn}https://${idm_srv_fqdn}/ipa/ui/${end} \n"
+        printf "    IP Address: ${cyn}${idm_server_ip}${end} \n"
+        printf "    Username: ${cyn}${idm_admin_user}${end}\n"
+        printf "    Password: the vault variable ${cyn}admin_user_password${end} \n\n"
+        printf "    ${blu}Run:${end} ${grn}ansible-vault edit ${vaultfile}${end} \n\n"
      else
         printf "%s\n" " ${red}IDM Server was not properly deployed please verify deployment.${end}"
         exit 1
      fi
 }
 
+function qubinode_install_idm () {
+    isIdMrunning
+    if [ "A${idm_running}" != "Atrue" ]
+    then
+        qubinode_vm_deployment_precheck
+        ask_user_input
+        IDM_INSTALL_PLAY="${project_dir}/playbooks/idm_server.yml"
+
+        echo "Install and configure the IdM server"
+        idm_server_ip=$(awk '/idm_server_ip:/ {print $2}' "${idm_vars_file}")
+        echo "Current IP of IDM Server ${idm_server_ip}" || exit $?
+        ansible-playbook "${IDM_INSTALL_PLAY}" --extra-vars "vm_ipaddress=${idm_server_ip}" || exit $?
+	qubinode_idm_status
+     else
+	qubinode_idm_status
+     fi
+}
+
 function qubinode_deploy_idm () {
+    check_additional_storage
+
+    # Ensure host system is setup as a KVM host
+    openshift4_kvm_health_check
+    if [[ "A${KVM_IN_GOOD_HEALTH}" != "Aready"  ]]; then
+      qubinode_setup_kvm_host
+    fi
+
     qubinode_deploy_idm_vm
     qubinode_install_idm
 }
+
+function qubinode_idm_maintenance () {
+    case ${product_maintenance} in
+       stop)
+            name=$idm_srv_hostname
+	    qubinode_rhel_maintenance
+            ;;
+       start)
+            name=$idm_srv_hostname
+	    qubinode_rhel_maintenance
+            ;;
+       status)
+            qubinode_idm_status
+            ;;
+       *)
+           echo "No arguement was passed"
+           ;;
+    esac
+}
+

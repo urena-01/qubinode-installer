@@ -152,8 +152,9 @@ function collect_system_information() {
 
 
     libvirt_pool_name=$(cat $project_dir/playbooks/vars/kvm_host.yml | grep libvirt_pool_name: | awk '{print $2}')
-    if [ "A${libvirt_pool_name}" == "Adefault" ]
+    if [[ "A${libvirt_pool_name}" == "Adefault" ]] && [[ "A${skip_libvirt_pool}" == "Ayes" ]]
     then
+        printf "%s\n\n" "   Getting information about the libvirt storage."
         if ! sudo virsh pool-info default > /dev/null 2>&1
         then
 cat > /tmp/libvirt-vol.xml <<EOF
@@ -177,6 +178,8 @@ EOF
 
     AVAILABLE_STORAGE=$(sudo virsh pool-list --details | grep "${libvirt_pool_name}" |awk '{print $5*1024}')
     AVAILABLE_HUMAN_STORAGE=$(sudo virsh pool-list --details | grep "${libvirt_pool_name}" |awk '{print $5,$6}')
+
+    sed -i "s/skip_libvirt_pool:.*/skip_libvirt_pool: yes/g" "$project_dir/playbooks/vars/kvm_host.yml"
 }
 
 function create_qubinode_profile_log () {
@@ -323,4 +326,26 @@ function check_hardware_resources () {
     fi
 
     sed -i "s/ocp_cluster_size:.*/ocp_cluster_size: "$PROFILE"/g" "${vars_file}"
+}
+
+function clean_up_stale_vms(){
+    KILLVM=true
+    stalemachines=$(sudo virsh list  --all | grep $1 | awk '{print $2}')
+    for vm in $stalemachines
+    do
+       KILLVM=false
+    done
+
+    if [[ $KILLVM == "true" ]]; then 
+        stale_vms=$(sudo ls "${libvirt_dir}/" | grep $1)
+        if [[ ! -z $stale_vms ]]; then 
+            for old_vm in $stale_vms
+            do
+            if [[ "$old_vm" == *${1}* ]]; then 
+                sudo rm  -f "${libvirt_dir}/$old_vm"
+            fi
+            done 
+        fi 
+    fi
+
 }

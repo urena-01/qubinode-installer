@@ -17,7 +17,20 @@ function qubinode_product_deployment () {
               then
                   openshift3_server_maintenance
               else
+                  setup_download_options
                   openshift_enterprise_deployment
+              fi
+              ;;
+          okd3)
+              openshift3_variables
+              if [ "A${teardown}" == "Atrue" ]
+              then
+                  qubinode_teardown_openshift
+              elif [ "A${qubinode_maintenance}" == "Atrue" ]
+              then
+                  openshift3_server_maintenance
+              else
+                  okd3_deployment
               fi
               ;;
           ocp4)
@@ -29,7 +42,8 @@ function qubinode_product_deployment () {
                   openshift4_server_maintenance
               else
                   ASK_SIZE=true
-                  check_for_rhel_qcow_image
+                  rhel_major=$(awk '/^qcow_rhel_release:/ {print $2}' "${project_dir}/playbooks/vars/idm.yml")
+                  setup_download_options 
                   qubinode_deploy_ocp4
               fi
               ;;
@@ -39,6 +53,9 @@ function qubinode_product_deployment () {
                   qubinode_teardown_satellite
               else
                   echo "Installing Satellite"
+                  rhel_major=$(awk '/^qcow_rhel_release:/ {print $2}' "${project_dir}/playbooks/vars/satellite.yml")
+                  setup_download_options
+                  download_files
                   qubinode_deploy_satellite
               fi
               ;;
@@ -47,6 +64,8 @@ function qubinode_product_deployment () {
               then
                   qubinode_teardown_tower
               else
+                  setup_download_options
+                  download_files
                   qubinode_deploy_tower
               fi
               ;;
@@ -55,8 +74,14 @@ function qubinode_product_deployment () {
               then
                   echo "Running IdM VM teardown function"
                   qubinode_teardown_idm
+              elif [ "A${qubinode_maintenance}" == "Atrue" ]
+              then
+                  qubinode_idm_maintenance
               else
                   echo "Running IdM VM deploy function"
+                  rhel_major=$(awk '/^qcow_rhel_release:/ {print $2}' "${project_dir}/playbooks/vars/idm.yml")
+                  setup_download_options
+                  download_files
                   qubinode_deploy_idm
               fi
               ;;
@@ -65,7 +90,14 @@ function qubinode_product_deployment () {
               then
                   qubinode_rhel_teardown
               else
-                  qubinode_deploy_rhel
+                  if [ "A${qubinode_maintenance}" == "Atrue" ]
+                  then
+                      qubinode_rhel_maintenance
+                  else
+                      setup_download_options
+                      download_files
+                      qubinode_deploy_rhel
+                  fi
               fi
               ;;
           kvmhost)

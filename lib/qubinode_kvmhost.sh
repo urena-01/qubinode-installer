@@ -7,6 +7,31 @@ function kvm_host_variables () {
     QUBINODE_SYSTEM=$(awk '/run_qubinode_setup:/ {print $2; exit}' ${kvm_host_vars_file} | tr -d '"')
     vg_name=$(cat "${kvm_host_vars_file}"| grep vg_name: | awk '{print $2}')
     requested_brigde=$(cat "${kvm_host_vars_file}"|grep  vm_libvirt_net: | awk '{print $2}' | sed 's/"//g')
+    RHEL_VERSION=$(awk '/rhel_version/ {print $2}' "${vars_file}")
+    # Set the RHEL version
+    if grep '""' "${kvm_host_vars_file}"|grep -q rhel_release
+    then
+        rhel_release=$(cat /etc/redhat-release | grep -o [7-8].[0-9])
+        sed -i "s#rhel_release: \"\"#rhel_release: "$rhel_release"#g" "${kvm_host_vars_file}"
+    fi
+
+    RHEL_MAJOR=$(cat /etc/redhat-release | grep -o [7-8])
+    if [ "A${RHEL_MAJOR}" == "A8" ]
+    then
+       rhel_release=$(awk '/rhel8_version:/ {print $2}' "${vars_file}")
+    elif [ "A${RHEL_MAJOR}" == "A7" ]
+    then
+       rhel_release=$(awk '/rhel7_version:/ {print $2}' "${vars_file}")
+    else
+        rhel_release=$(cat /etc/redhat-release | grep -o [7-8].[0-9])
+    fi
+
+
+    if [[ $RHEL_VERSION == "RHEL8" ]]; then
+      sed -i 's#libvirt_pkgs_8:#libvirt_pkgs:#g' "${vars_file}"
+    elif [[ $RHEL_VERSION == "RHEL7" ]]; then
+      sed -i 's#libvirt_pkgs_7:#libvirt_pkgs:#g' "${vars_file}"
+    fi
 }
 
 function getPrimaryDisk () {
@@ -72,6 +97,7 @@ function check_additional_storage () {
               createmenu "${ALL_DISKS[@]}"
               disk=($(echo "${selected_option}"))
 
+              printf "%s\n" "   The installer will wipe the device $disk and then create a vg,lv and mount it as /var/lib/libvirt/images."
               confirm "    Continue with $disk? ${blu}yes/no${end}"
               if [ "A${response}" == "Ayes" ]
               then
@@ -289,10 +315,11 @@ function qubinode_networking () {
         DEFINED_BRIDGE=""
     fi
 
-    CURRENT_KVM_HOST_PRIMARY_INTERFACE=$(sudo route | grep '^default' | awk '{print $8}')
+    CURRENT_KVM_HOST_PRIMARY_INTERFACE=$(sudo route | grep '^default' | awk '{print $8}'|grep $DEFINED_BRIDGE)
     if [ "A${CURRENT_KVM_HOST_PRIMARY_INTERFACE}" == "A${DEFINED_BRIDGE}" ]
     then
-      KVM_HOST_PRIMARY_INTERFACE=$(sudo brctl show "${DEFINED_BRIDGE}" | grep "${DEFINED_BRIDGE}"| awk '{print $4}')
+      #KVM_HOST_PRIMARY_INTERFACE=$(sudo brctl show "${DEFINED_BRIDGE}" | grep "${DEFINED_BRIDGE}"| awk '{print $4}')
+      KVM_HOST_PRIMARY_INTERFACE=$(ip link show master qubibr0|awk -F: '/state UP/ {sub(/^[ \t]+/, "");print $2}')
       linenum=$(cat "${project_dir}/playbooks/vars/all.yml" | grep -n 'create:'  | head -2 | tail -1  | awk '{print $1}' | tr -d :)
       sed -i ''${linenum}'s/create:.*/create: false/' "${project_dir}/playbooks/vars/all.yml"
     else
@@ -346,9 +373,6 @@ function qubinode_networking () {
         #echo "Updating the kvm_host_macaddr to ${foundmac}"
         sed -i "s#kvm_host_macaddr:.*#kvm_host_macaddr: '"${foundmac}"'#g" "${kvm_host_vars_file}"
     fi
-
-    # Check Network
-    #qubinode_check_libvirt_net
 }
 
 
@@ -409,21 +433,6 @@ function qubinode_check_libvirt_net() {
     fi
 }
 
-function qcow_check() {
-    libvirt_dir=$(awk '/^kvm_host_libvirt_dir/ {print $2}' "${project_dir}/playbooks/vars/kvm_host.yml")
-    os_qcow_image_name=$(awk '/^os_qcow_image_name/ {print $2}' "${project_dir}/playbooks/vars/all.yml")
-    qcow_image=$( sudo bash -c 'find / -name '${os_qcow_image_name}' | grep -v qubinode | head -n 1')
-    if sudo bash -c '[[ ! -f '${libvirt_dir}'/'${os_qcow_image_name}' ]]'; then
-      if [[ -f "${project_dir}/${os_qcow_image_name}" ]]; then
-        sudo bash -c 'cp "'${project_dir}'/'${os_qcow_image_name}'"  '${libvirt_dir}'/'${os_qcow_image_name}''
-      elif [[ -f ${qcow_image} ]]; then
-        sudo bash -c 'cp /'${qcow_image}' '${libvirt_dir}'/'${os_qcow_image_name}''
-      else
-        echo "${os_qcow_image_name} not found on machine please copy over "
-        exit 1
-      fi
-    fi
-}
 
 function qubinode_setup_kvm_host () {
     # set variable to enable prompting user if they want to
@@ -496,7 +505,8 @@ function qubinode_check_kvmhost () {
     DEFINED_VG=$(awk '/vg_name/ {print $2; exit}' "${kvm_host_vars_file}"| tr -d '"')
     DEFINED_BRIDGE=$(awk '/qubinode_bridge_name/ {print $2; exit}' "${kvm_host_vars_file}"| tr -d '"')
     BRIDGE_IP=$(sudo awk -F'=' '/IPADDR=/ {print $2}' "/etc/sysconfig/network-scripts/ifcfg-${DEFINED_BRIDGE}")
-    BRIDGE_INTERFACE=$(sudo brctl show "${DEFINED_BRIDGE}" | awk -v var="${DEFINED_BRIDGE}" '$1 == var {print $4}')
+    #BRIDGE_INTERFACE=$(sudo brctl show "${DEFINED_BRIDGE}" | awk -v var="${DEFINED_BRIDGE}" '$1 == var {print $4}')
+    BRIDGE_INTERFACE=$(ip link show master qubibr0|awk -F: '/state UP/ {sub(/^[ \t]+/, "");print $2}')
 
     if [ ! -f /usr/bin/virsh ]
     then
@@ -534,7 +544,7 @@ function qubinode_check_kvmhost () {
         if [ "A${HARDWARE_ROLE}" != "Alaptop" ]
         then
             echo "Running network checks"
-            if ! sudo brctl show $DEFINED_BRIDGE > /dev/null 2>&1
+            if ! sudo ip link show master $DEFINED_BRIDGE > /dev/null 2>&1
             then
                 echo "The required bridge $DEFINED_BRIDGE is not setup"
                 qubinode_setup_kvm_host

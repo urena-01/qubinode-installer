@@ -151,7 +151,6 @@ function qubinode_rhsm_register () {
             exit 1
         fi
     
-        #encrupt vault file
         encrypt_ansible_vault "${vault_vars_file}" > /dev/null 2>&1
     
         IS_REGISTERED=$(grep -o 'This system is not yet registered' "${IS_REGISTERED_tmp}")
@@ -161,11 +160,11 @@ function qubinode_rhsm_register () {
             printf "%s\n" ""
             printf "%s\n" " ${rhsm_msg}"
             rhsm_reg_result=$(mktemp)
-            RHEL_MAJOR=$(cat /etc/redhat-release | grep -o [7-8])
-            if [ "A${RHEL_MAJOR}" == "A8" ]
+            local rhsm_rhel_major=$(sed -rn 's/.*([0-9])\.[0-9].*/\1/p' /etc/redhat-release)
+            if [ "A${rhsm_rhel_major}" == "A8" ]
             then
                RHEL_RELEASE=$(awk '/rhel8_version:/ {print $2}' "${vars_file}")
-            elif [ "A${RHEL_MAJOR}" == "A7" ]
+            elif [ "A${rhsm_rhel_major}" == "A7" ]
             then
                RHEL_RELEASE=$(awk '/rhel7_version:/ {print $2}' "${vars_file}")
             else
@@ -182,7 +181,9 @@ function qubinode_rhsm_register () {
                 cat "${rhsm_reg_result}"
             fi
         else
-            printf "%s\n" " ${yel}$(hostname)${end} ${blu}is already registered${end}"
+            # this variables isn't being used at the moment
+            system_already_registered=yes
+            #printf "%s\n" " ${yel}$(hostname)${end} ${blu}is already registered${end}"
         fi
     fi
 
@@ -213,7 +214,7 @@ function get_rhsm_user_and_pass () {
         printf "%s\n\n" ""
         echo -n "   ${blu}Enter your RHSM username and press${end} ${grn}[ENTER]${end}: "
         read rhsm_username
-        sed -i "s/rhsm_username: \"\"/rhsm_username: "$rhsm_username"/g" "${vaulted_file}"
+        sed -i "s/rhsm_username: \"\"/rhsm_username: "$rhsm_username"/g" "${vault_vars_file}"
     fi
 
     if grep '""' "${vault_vars_file}"|grep -q rhsm_password
@@ -222,7 +223,7 @@ function get_rhsm_user_and_pass () {
         echo -n "   ${blu}Enter your RHSM password and press${end} ${grn}[ENTER]${end}: "
         read_sensitive_data
         rhsm_password="${sensitive_data}"
-        sed -i "s/rhsm_password: \"\"/rhsm_password: "$rhsm_password"/g" "${vaulted_file}"
+        sed -i "s/rhsm_password: \"\"/rhsm_password: "$rhsm_password"/g" "${vault_vars_file}"
         printf "%s\n" ""
     fi
 }
@@ -246,82 +247,3 @@ function get_subscription_pool_id () {
     fi
 }
 
-function check_for_openshift_subscription () {
-
-    if [ -f $ocp3_vars_file ]
-    then
-        openshift_vars_file=$ocp3_vars_file
-    elif [ -f $ocp4_vars_file ]
-    then
-        openshift_vars_file=$ocp4_vars_file
-    else
-        printf "%s\n" "    Could not determine the correct openshift vars file"
-        exit 1
-    fi
-
-    # Set OpenShift product
-    sed -i "s/openshift_product:.*/openshift_product: $openshift_product/g" "${openshift_vars_file}"
-
-    # Make sure the Qubinode is registered
-    qubinode_rhsm_register
- 
-    # Make sure OpenShift subscription is attached
-    if grep openshift_pool_id: ${openshift_vars_file} | grep '""' > /dev/null 2>&1
-    then
-        get_subscription_pool_id 'Red Hat OpenShift Container Platform'
-    fi
-
-    # This function trys to find a subscription that mataches the OpenShift product
-    # then saves the pool id for that function and updates the varaibles file.
-    AVAILABLE=$(sudo subscription-manager list --available --matches 'Red Hat OpenShift Container Platform' | grep Pool | awk '{print $3}' | head -n 1)
-    CONSUMED=$(sudo subscription-manager list --consumed --matches 'Red Hat OpenShift Container Platform' --pool-only)
-
-
-    if [ "A${CONSUMED}" != "A" ]
-    then
-       #echo "The system is already attached to the Red Hat OpenShift Container Platform with pool id: ${CONSUMED}"
-       POOL_ID="${CONSUMED}"
-    elif [ "A${CONSUMED}" == "A" ]
-    then
-       #echo "Found the repo id: ${AVAILABLE} for Red Hat OpenShift Container Platform"
-       POOL_ID="${AVAILABLE}"
-
-       #echo "Attaching system Red Hat OpenShift Container Platform subscription pool"
-       sudo subscription-manager remove --all
-       sudo subscription-manager attach --pool="${POOL_ID}"
-    else
-        cat "${project_dir}/docs/subscription_pool_message"
-        exit 1
-    fi
-
-    # set subscription pool id
-    if [ "A${POOL_ID}" != "A" ]
-    then
-        #echo "Setting pool id for OpenShift Container Platform"
-        if grep '""' "${openshift_vars_file}"|grep -q openshift_pool_id
-        then
-            #echo "${openshift_vars_file} openshift_pool_id variable"
-            sed -i "s/openshift_pool_id: \"\"/openshift_pool_id: $POOL_ID/g" "${openshift_vars_file}"
-        fi
-    else
-        echo "  The OpenShift Pool ID is not available in ${openshift_vars_file}"
-        exit 1
-    fi
-
-    # Checks for OCP3
-    if [ -f $ocp3_vars_file ]
-    then
-        # Decrypt Ansible Vault
-        decrypt_ansible_vault "${vault_vars_file}" > /dev/null 2>&1
-        if grep '""' "${vault_vars_file}"|grep -q rhsm_username
-        then
-            printf "%s\n" "The OpenShift 3 Enterprise installer requires your access.redhat.com"
-            printf "%s\n\n" "username and password."
-
-            # Get RHSM username and password.
-            get_rhsm_user_and_pass
-        fi
-        # Encrypt Ansible Vault
-        encrypt_ansible_vault "${vault_vars_file}" > /dev/null 2>&1
-    fi
-}

@@ -137,108 +137,30 @@ function get_rhel_version() {
 
 }
 
-function qubinode_base_requirements () {
-# Ensures the system is ready for VM deployment.
-
-    setup_variables
-    # Ensure ./qubinode-installer -m setup is completed
-    if [ "A${setup_completed}" == "Ano" ]
-    then
-       qubinode_installer_setup
-    fi
-
-    # Ensure ./qubinode-installer -m rhsm is completed
-    if [ "A${rhsm_completed}" == "Ano" ]
-    then
-       qubinode_rhsm_register
-    fi
-
-    # Ensure ./qubinode-installer -m ansible is completed
-    if [ "A${ansible_completed}" == "Ano" ]
-    then
-       qubinode_setup_ansible
-    fi
-
-    sed -i "s/qubinode_base_reqs_completed:.*/qubinode_base_reqs_completed: yes/g" "${vars_file}"
-}
-
-function qubinode_vm_deployment_precheck () {
-# Ensures the system is ready for VM deployment.
-
-    qubinode_base_requirements
-    # Ensure the ansible function has bee executed
-    if [ ! -f /usr/bin/ansible ]
-    then
-        qubinode_setup_ansible
-    else
-        STATUS=$(ansible-galaxy list | grep deploy-kvm-vm >/dev/null 2>&1; echo $?)
-        if [ "A${STATUS}" != "A0" ]
-        then
-            qubinode_setup_ansible
-        fi
-    fi
-
-    # Ensure ./qubinode-installer -m host is completed
-    if [ "A${host_completed}" == "Ano" ]
-    then
-       qubinode_setup_kvm_host
-    fi
-
-    # Check for required Qcow image
-    check_for_rhel_qcow_image
-}
-
-function check_for_rhel_qcow_image () {
-    # check for required OS qcow image and copy it to right location
-    libvirt_dir=$(awk '/^kvm_host_libvirt_dir/ {print $2}' "${project_dir}/samples/all.yml")
-    os_qcow_image=$(awk '/^qcow_rhel7_name:/ {print $2}' "${project_dir}/samples/all.yml")
-    if [ ! -f "${libvirt_dir}/${os_qcow_image}" ]
-    then
-        if [ -f "${project_dir}/${os_qcow_image}" ]
-        then
-            sudo cp "${project_dir}/${os_qcow_image}" "${libvirt_dir}/${os_qcow_image}"
-        else
-            printf "%s\n\n" ""
-            printf "%s\n" " Could not find ${red}${project_dir}/${os_qcow_image}${end},"
-            printf "%s\n\n" " please download the ${yel}${os_qcow_image}${end} to ${blu}${project_dir}${end}."
-            printf "%s\n\n" " ${cyn}Please refer the documentation for additional information.${end}"
-            exit 1
-        fi
-    fi
-}
-
-
-function pre_check_for_rhel_qcow_image () {
-    # check for required OS qcow image and copy it to right location
-    libvirt_dir=$(awk '/^kvm_host_libvirt_dir/ {print $2}' "${project_dir}/samples/all.yml")
-    os_qcow_image=$(awk '/^qcow_rhel7_name:/ {print $2}' "${project_dir}/samples/all.yml")
-    if [ ! -f "${libvirt_dir}/${os_qcow_image}" ]
-    then
-        if [ ! -f "${project_dir}/${os_qcow_image}" ]
-        then
-            printf "%s\n\n" ""
-            printf "%s\n" " Could not find ${red}${project_dir}/${os_qcow_image}${end},"
-            printf "%s\n\n" " please download the ${yel}${os_qcow_image}${end} to ${blu}${project_dir}${end}."
-            printf "%s\n\n" " ${cyn}Please refer the documentation for additional information.${end}"
-            exit 1
-        fi
-    fi
-}
 
 function qcow_check () {
+    # TODO: this should be removed
     download_files
     libvirt_dir=$(awk '/^kvm_host_libvirt_dir/ {print $2}' "${project_dir}/playbooks/vars/kvm_host.yml")
-    os_qcow_image_name=$(awk '/^qcow_rhel7_name:/ {print $2}' "${project_dir}/playbooks/vars/all.yml")
-    qcow_image=$( sudo bash -c 'find / -name '${os_qcow_image_name}' | grep -v qubinode | head -n 1')
-    if sudo bash -c '[[ ! -f '${libvirt_dir}'/'${os_qcow_image_name}' ]]'; then
-      if [[ -f "${project_dir}/${os_qcow_image_name}" ]]; then
-        sudo bash -c 'cp "'${project_dir}'/'${os_qcow_image_name}'"  '${libvirt_dir}'/'${os_qcow_image_name}''
-      elif [[ -f ${qcow_image} ]]; then
-        sudo bash -c 'cp /'${qcow_image}' '${libvirt_dir}'/'${os_qcow_image_name}''
-      else
-        echo "${os_qcow_image_name} not found on machine please copy over "
-        exit 1
-      fi
+    qcow_image_name=$(grep "qcow_rhel${rhel_major}_name:" "${project_dir}/playbooks/vars/all.yml"|awk '{print $2}')
+
+    # update IdM server with qcow image file
+    if [ -f $idm_vars_file ]
+    then
+        sed -i "s/^cloud_init_vm_image:.*/cloud_init_vm_image: $qcow_image_name/g" $idm_vars_file
+    fi
+
+
+    if sudo test ! -f "${libvirt_dir}/${qcow_image_name}"
+    then
+        if [ -f "${project_dir}/${qcow_image_name}" ]
+        then
+            sudo cp "${project_dir}/${qcow_image_name}"  "${libvirt_dir}/${qcow_image_name}"
+        else
+            echo "  Did not find ${qcow_image_name} in path ${project_dir}."
+            echo "  Download and copy ${qcow_image_name} to ${project_dir}."
+            exit 1
+        fi
     fi
 }
 
@@ -252,10 +174,10 @@ function install_rhsm_cli () {
         cd "${project_dir}/.python"
         python3 -m venv rhsm_cli
         source "${project_dir}/.python/rhsm_cli/bin/activate"
-        git clone https://github.com/antonioromito/rhsm-api-client
+        git clone https://github.com/antonioromito/rhsm-api-client > /dev/null 2>&1
         cd rhsm-api-client
-        pip install -r requirements.txt
-        python setup.py install --record files.txt
+        pip install -r requirements.txt > /dev/null 2>&1
+        python setup.py install --record files.txt > /dev/null 2>&1
         deactivate
         cd "${project_dir}"
     fi
@@ -267,6 +189,8 @@ setup_download_options () {
     OCP_TOKEN="${project_dir}/ocp_token"
     DWL_PULLSECRET=no
 
+    # Ensure user is setup for sudo
+    setup_sudoers
 
     # check for user provided ocp token or pull secret
     OCP_TOKEN_STATUS="notexist"
@@ -278,11 +202,18 @@ setup_download_options () {
     fi
 
     # check for pull secret
-    if [ -f "${project_dir}/pull-secret.txt" ]
+    if [ "A${CHECK_PULL_SECRET}" != "Ayes" ]
     then
+        # set status to exist to prevent check for pull secret when it's not required
         PULLSECRET_STATUS="exist"
+    else
+        if [ -f "${project_dir}/pull-secret.txt" ]
+        then
+            PULLSECRET_STATUS="exist"
+        else
+            PULLSECRET_STATUS="notexist"
+        fi
     fi
-
 
     # check for required OS qcow image or token
     TOKEN_STATUS="notexist"
@@ -323,6 +254,19 @@ setup_download_options () {
     then
         installer_artifacts_msg
         exit 1
+    fi
+
+    # Ensure qcow image is copied to the libvirt directory
+    if sudo test ! -f "${libvirt_dir}/${artifact_qcow_image}"
+    then
+        if [ -f "${project_dir}/${artifact_qcow_image}" ]
+        then
+            sudo cp "${project_dir}/${artifact_qcow_image}"  "${libvirt_dir}/${artifact_qcow_image}"
+        else
+            echo "  Did not find ${artifact_qcow_image} in path ${project_dir}."
+            echo "  Download and copy ${artifact_qcow_image} to ${project_dir}."
+            exit 1
+        fi
     fi
 }
 

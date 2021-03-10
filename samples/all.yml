@@ -31,9 +31,9 @@ rhsm_reg_method: ""
 # Ansible 2.9 on rhel 7  rhel-7-server-ansible-2.9-rpms
 rhel7_ansible_repo: rhel-7-server-ansible-2.9-rpms
 rhel8_ansible_repo: ansible-2.9-for-rhel-8-x86_64-rpms
-ansible_version: 2.9.7
+ansible_version: 2.9.10
 ansible_release: 2.9
-rhel8_version: 8.2
+rhel8_version: 8.3
 rhel7_version: 7.8
 
 # All VMs created name will begin with this prefix.
@@ -41,8 +41,8 @@ instance_prefix: qbn
 preappend_host_name: "{{ instance_prefix }}-{{ product }}-"
 
 # Cluster name
-# This should be moved
-cluster_name: qbn
+# This should be moved since this is now defined in the ocp* vars file
+#cluster_name: qbn
 
 vm_public_key: "/home/{{ admin_user }}/.ssh/id_rsa.pub"
 update_inventory: true
@@ -60,13 +60,18 @@ dns_servers:
 
 public_domain: "{{ domain }}"
 
+## When this var is set to true and the host gets it's ip address from
+## dhcp. It was take that IP address and configure the host to use static
+## ip address assignment. It's recommended that you create a DHCP reservation
+## for this host to ensure the DHCP lease does not expire and get consume by
+## another host on the network.
+convert_dhcp_to_static: true
+
 qubinode_installer_setup_completed: no
 qubinode_installer_rhsm_completed: no
+user_input_complete: no
 qubinode_installer_ansible_completed: no
 qubinode_base_reqs_completed: no
-
-# Ensure VMs are always using static IP even when DHCP issued
-static_ip: true
 
 # ROLE: swygue-redhat-subscription
 rhsm_org: "{{ rhsm_org }}"
@@ -79,15 +84,15 @@ org_id: "{{ rhsm_org }}"
 
 # ROLE: swygue.edge_host_setup role
 # the user that will admin the system
-ssh_username: "{{ admin_user }}"
+ssh_username: "{{ admin_user }}" # this var has been deprecated and should be removed
 
 # ROLE: deploy-kvm-vm
 #--------------------
 # Use to create VM
 # Red Hat Enterprise Linux 7.8 KVM Guest Image
 qcow_rhel7_name: rhel-server-7.8-x86_64-kvm.qcow2
-qcow_rhel8_name: rhel-8.2-x86_64-kvm.qcow2
-os_qcow_image_name: "{{ qcow_rhel7_name }}"
+qcow_rhel8_name: rhel-8.3-x86_64-kvm.qcow2
+os_qcow_image_name: "{{ qcow_rhel8_name }}"
 qcow_rhel7u8_checksum: ce4943d38e00a5c81272ebd3f3542b2d9557382d1c331c46ed553fdcca778b2d
 qcow_rhel8u2_checksum: 8e34e57feb68d19ba9ffbefcd3f662b1a3437c9f7d811449c5ad452adda64384
 
@@ -129,30 +134,6 @@ memory_profile: ""
 ocp_cluster_size: ""
 warn_storage_profile: yes
 
-libvirt_host_networks:
-  - name: "{{ nat_network_name }}"
-    create: true
-    mode: nat
-    int_domain: compute.local
-    external_domain: "{{ public_domain }}"
-    mac_start: "52:54:00:"
-    master_count: 3
-    compute_count: 2
-    subnet: "192.168.50.0"
-    gateway: "192.168.50.1"
-    mask: "255.255.255.0"
-  - name: "{{ vm_libvirt_net }}"
-    create: true
-    mode: bridge
-    bridge_device: "{{ kvm_host_bridge_name | default(qubinode_bridge_name) }}"
-    ifcfg_type: "{{ kvm_bridge_type }}"
-    ifcfg_bootproto: "{{ kvm_host_bootproto }}"
-    bridge_slave_dev: "{{ kvm_host_interface }}"
-    gateway: "{{ kvm_host_gw }}"
-    mask_prefix: "{{ kvm_host_mask_prefix }}"
-    ipaddress: "{{ kvm_host_ip }}"
-    mask: "{{ kvm_host_netmask }}"
-    mac: "{{ kvm_host_macaddr }}"
 
 ###########################################
 # variables for swygue.edge_host_setup role
@@ -259,5 +240,5 @@ qubi_required_pkgs: |
    cockpit-storaged, cockpit-packagekit, cockpit-machines, cockpit-sosreport,
    cockpit-kubernetes, cockpit-pcp, cockpit-bridge, tuned, openssh-server,
    wget, git, net-tools, bind-utils, yum-utils, iptables-services, bridge-utils,
-   bash-completion, kexec-tools, sos, psacct, vim, ansible,
+   bash-completion, kexec-tools, sos, psacct, vim, ansible, lm_sensors, cargo,
    pyOpenSSL, docker, device-mapper-event-libs, device-mapper-libs, httpd-tools, tmux, patch,  python-netaddr"

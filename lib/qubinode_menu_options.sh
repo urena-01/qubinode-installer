@@ -6,34 +6,10 @@ function qubinode_product_deployment () {
 
     # the product_opt is still use by some functions and it should be refactored
     product_opt="${PRODUCT_OPTION}"
-    AVAIL_PRODUCTS="okd3 ocp3 ocp4 satellite idm kvmhost tower"
+    AVAIL_PRODUCTS="okd4 ocp4 satellite idm kvmhost tower"
     case $PRODUCT_OPTION in
-          ocp3)
-              openshift3_variables
-              if [ "A${teardown}" == "Atrue" ]
-              then
-                  qubinode_teardown_openshift
-              elif [ "A${qubinode_maintenance}" == "Atrue" ]
-              then
-                  openshift3_server_maintenance
-              else
-                  setup_download_options
-                  openshift_enterprise_deployment
-              fi
-              ;;
-          okd3)
-              openshift3_variables
-              if [ "A${teardown}" == "Atrue" ]
-              then
-                  qubinode_teardown_openshift
-              elif [ "A${qubinode_maintenance}" == "Atrue" ]
-              then
-                  openshift3_server_maintenance
-              else
-                  okd3_deployment
-              fi
-              ;;
-          ocp4)
+          okd4)
+	      openshift4_variables
               if [ "A${teardown}" == "Atrue" ]
               then
                   openshift4_qubinode_teardown
@@ -42,7 +18,21 @@ function qubinode_product_deployment () {
                   openshift4_server_maintenance
               else
                   ASK_SIZE=true
-                  rhel_major=$(awk '/^qcow_rhel_release:/ {print $2}' "${project_dir}/playbooks/vars/idm.yml")
+                  qubinode_deploy_ocp4
+              fi
+              ;;
+          ocp4)
+              CHECK_PULL_SECRET=yes
+	      openshift4_variables
+              if [ "A${teardown}" == "Atrue" ]
+              then
+                  openshift4_qubinode_teardown
+              elif [ "A${qubinode_maintenance}" == "Atrue" ]
+              then
+                  openshift4_server_maintenance
+              else
+                  ASK_SIZE=true
+                  CHECK_PULL_SECRET=no
                   setup_download_options 
                   qubinode_deploy_ocp4
               fi
@@ -52,8 +42,8 @@ function qubinode_product_deployment () {
               then
                   qubinode_teardown_satellite
               else
-                  echo "Installing Satellite"
-                  rhel_major=$(awk '/^qcow_rhel_release:/ {print $2}' "${project_dir}/playbooks/vars/satellite.yml")
+                  rhel_major=7
+                  CHECK_PULL_SECRET=no
                   setup_download_options
                   download_files
                   qubinode_deploy_satellite
@@ -64,6 +54,7 @@ function qubinode_product_deployment () {
               then
                   qubinode_teardown_tower
               else
+                  CHECK_PULL_SECRET=no
                   setup_download_options
                   download_files
                   qubinode_deploy_tower
@@ -78,8 +69,8 @@ function qubinode_product_deployment () {
               then
                   qubinode_idm_maintenance
               else
+                  CHECK_PULL_SECRET=no
                   echo "Running IdM VM deploy function"
-                  rhel_major=$(awk '/^qcow_rhel_release:/ {print $2}' "${project_dir}/playbooks/vars/idm.yml")
                   setup_download_options
                   download_files
                   qubinode_deploy_idm
@@ -94,7 +85,8 @@ function qubinode_product_deployment () {
                   then
                       qubinode_rhel_maintenance
                   else
-                      setup_download_options
+                      CHECK_PULL_SECRET=no
+                      #setup_download_options
                       download_files
                       qubinode_deploy_rhel
                   fi
@@ -123,7 +115,9 @@ function qubinode_maintenance_options () {
         create_qubinode_profile_log
     elif [ "${qubinode_maintenance_opt}" == "setup" ]
     then
-        qubinode_installer_setup
+        # This ensures the system is base requires are met
+        # before -m ansible -m rhsm -m host can be executed
+        qubinode_base_requirements
     elif [ "${qubinode_maintenance_opt}" == "rhsm" ]
     then
         qubinode_rhsm_register
@@ -132,10 +126,12 @@ function qubinode_maintenance_options () {
         qubinode_setup_ansible
     elif [ "${qubinode_maintenance_opt}" == "host" ] || [ "${maintenance}" == "kvmhost" ]
     then
-        qubinode_setup_kvm_host
-    elif [ "${qubinode_maintenance_opt}" == "deploy_nodes" ]
+	## this should be replace as qubinode_setup does everthing that's required
+        #qubinode_setup_kvm_host
+	qubinode_setup
+    elif [ "${qubinode_maintenance_opt}" == "rebuild_qubinode" ]
     then
-        deploy_openshift3_nodes
+        rebuild_qubinode
     elif [ "${qubinode_maintenance_opt}" == "undeploy" ]
     then
         #TODO: this should remove all VMs and clean up the project folder
